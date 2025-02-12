@@ -32,30 +32,26 @@ def create_faiss_index(text):
     vector_store = FAISS.from_texts(texts, embeddings)
 
 
-def query_llama_ollama(context, query):
-    """Query the local LLaMA 3.2 model via Ollama three times and synthesize the answers."""
-    enhanced_query = "Add information from other sources to enhance the answer. Make sure to mention when you use outside sources" + query
-    prompt = f"Context: {context}\n\nQuestion: {enhanced_query}\nAnswer:"
+import openai
+import os
+
+# Get OpenAI API Key from environment variable
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+def query_openai(context, query):
+    """Query OpenAI GPT-4 instead of Ollama."""
+    prompt = f"Context: {context}\n\nQuestion: {query}\nAnswer:"
+
+    response = openai.ChatCompletion.create(
+        model="gpt-4o-mini",  # Use "gpt-3.5-turbo" for cheaper queries
+        messages=[
+            {"role": "system", "content": "You are an AI assistant answering questions based on provided context."},
+            {"role": "user", "content": prompt}
+        ],
+        api_key=OPENAI_API_KEY
+    )
     
-    # Generate 3 different answers
-    answers = []
-    for _ in range(3):
-        result = subprocess.run(["ollama", "run", "llama3", prompt], capture_output=True, text=True)
-        answers.append(result.stdout.strip())
-    
-    # Create synthesis prompt
-    synthesis_prompt = f"""Here are three answers to the question "{query}":
-
-1: {answers[0]}
-2: {answers[1]}
-3: {answers[2]}
-
-Please synthesize these three answers into one comprehensive, accurate response that combines the best insights from all three answers."""
-
-    # Get synthesized answer
-    final_result = subprocess.run(["ollama", "run", "llama3", synthesis_prompt], 
-                                capture_output=True, text=True)
-    return final_result.stdout.strip()
+    return response["choices"][0]["message"]["content"]
 
 
 def query_document(query, custom_context=None):
@@ -69,7 +65,7 @@ def query_document(query, custom_context=None):
         return "No document processed yet."
     docs = vector_store.similarity_search(query, k=3)
     context = "\n".join([doc.page_content for doc in docs])
-    return query_llama_ollama(context, query)
+    return query_openai(context, query)
 
 
 from contextlib import asynccontextmanager
