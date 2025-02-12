@@ -7,12 +7,13 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.text_splitter import CharacterTextSplitter
 from starlette.responses import JSONResponse
-import subprocess
+import openai
 
 app = FastAPI()
 embeddings = HuggingFaceEmbeddings(model_name='sentence-transformers/all-MiniLM-L6-v2')
 vector_store = None
-pdf_path = "/Users/sj1212/Downloads/2025_MandateForLeadership_FULL.pdf"  # Dedicated PDF document
+pdf_path = "2025_MandateForLeadership_FULL.pdf"  # Dedicated PDF document
+FAISS_INDEX_PATH = "faiss_index"
 
 
 def extract_text_from_pdf():
@@ -25,69 +26,79 @@ def extract_text_from_pdf():
 
 
 def create_faiss_index(text):
-    """Create a FAISS vector index from extracted text."""
+    """Create FAISS vector index from extracted text and save it."""
     global vector_store
-    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    text_splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=10)
     texts = text_splitter.split_text(text)
-    vector_store = FAISS.from_texts(texts, embeddings)
-
-
-import openai
-import os
-
-# Get OpenAI API Key from environment variable
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-def query_openai(context, query):
-    """Query OpenAI GPT-4 instead of Ollama."""
-    prompt = f"Context: {context}\n\nQuestion: {query}\nAnswer:"
-
-    response = openai.ChatCompletion.create(
-        model="gpt-4o-mini",  # Use "gpt-3.5-turbo" for cheaper queries
-        messages=[
-            {"role": "system", "content": "You are an AI assistant answering questions based on provided context."},
-            {"role": "user", "content": prompt}
-        ],
-        api_key=OPENAI_API_KEY
-    )
+    print(f"Total chunks created: {len(texts)}")
     
-    return response["choices"][0]["message"]["content"]
+    try:
+        vector_store = FAISS.from_texts(texts, embeddings)
+        vector_store.save_local(FAISS_INDEX_PATH)  # Save FAISS index locally
+        print("✅ FAISS index created and saved successfully!")
+    except Exception as e:
+        print(f"❌ Error creating FAISS index: {e}")
 
 
-def query_document(query, custom_context=None):
-    """Retrieve relevant chunks and generate a response using LLaMA 3.2. Stick to the information in the document and focus on numbers, names, and places."""
-    if custom_context:
-        # Use the provided custom context
-        return query_llama_ollama(custom_context, query)
-    
-    # Default behavior using vector store
-    if vector_store is None:
-        return "No document processed yet."
-    docs = vector_store.similarity_search(query, k=3)
-    context = "\n".join([doc.page_content for doc in docs])
-    return query_openai(context, query)
-
-
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    load_document()
-    yield
-
-app = FastAPI(lifespan=lifespan)
 def load_document():
-    """Load and process the dedicated document at startup."""
-    text = extract_text_from_pdf()
-    if text != "Error: PDF document not found.":
-        create_faiss_index(text)
-        print("PDF document successfully loaded into FAISS index.")
-    else:
-        print(text)
+    """Load FAISS index if available; otherwise, process the document."""
+    global vector_store
 
+    if os.path.exists(FAISS_INDEX_PATH):
+        print("🔄 Loading existing FAISS index...")
+        try:
+            vector_store = FAISS.load_local(FAISS_INDEX_PATH, embeddings, allow_dangerous_deserialization=True)
+            print("✅ FAISS index loaded successfully!")
+        except Exception as e:
+            print(f"❌ Error loading FAISS index: {e}")
+    else:
+        print("⚠️ FAISS index not found, processing the document...")
+        text = extract_text_from_pdf()
+        if text != "Error: PDF document not found.":
+            create_faiss_index(text)
+        else:
+            print(text)
 
 @app.get("/query/")
 def query_api(query: str = Query(..., description="Enter your question")):
     """Handle user queries."""
-    answer = query_document(query)
-    return JSONResponse(content={"answer": answer})
+    print(f"Received query: {query}")  # Debugging line
+
+    try:
+        if vector_store is None:
+            return JSONResponse(content={"error": "FAISS index is not loaded."}, status_code=500)
+        docs = vector_store.similarity_search(query, k=3)
+        context = "\n".join([doc.page_content for doc in docs])
+        answer = query_openai(context, query)
+        print(f"Generated answer: {answer}")  # Debugging line
+        return JSONResponse(content={"answer": answer})
+    except Exception as e:
+        print(f"❌ Error processing query: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+import openai
+
+def query_openai(context, query):
+    """Query OpenAI GPT-4o using the new API format."""
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    if not OPENAI_API_KEY:
+        return "Error: OpenAI API key is missing."
+
+    client = openai.OpenAI(api_key=OPENAI_API_KEY)  # Create an OpenAI client
+
+    prompt = f"Context: {context}\n\nQuestion: {query}\nAnswer:"
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "You are an AI assistant answering questions based on provided context."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+        return response.choices[0].message.content
+    except openai.OpenAIError as e:
+        return f"OpenAI API error: {e}"
+
+load_document()  # Ensure FAISS index is loaded on startup
