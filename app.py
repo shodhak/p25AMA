@@ -31,7 +31,7 @@ if get_answer or st.session_state.submit:
     if query:
         with st.spinner("🤖 Generating answer..."):
             try:
-                response = requests.get("http://127.0.0.1:8000/query/", params={"query": query})
+                response = requests.get("https://project2025.up.railway.app/query/", params={"query": query})
                 if response.status_code == 200:
                     answer = response.json().get("answer", "No response received.")
                     st.success("✅ Answer:")
