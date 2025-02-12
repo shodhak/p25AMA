@@ -7,3 +7,5 @@ langchain-community
 langchain-huggingface
 requests
 openai
+streamlit
+
