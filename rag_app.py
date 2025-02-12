@@ -102,3 +102,8 @@ def query_openai(context, query):
         return f"OpenAI API error: {e}"
 
 load_document()  # Ensure FAISS index is loaded on startup
+
+@app.get("/")
+def root():
+    return {"message": "FastAPI is running! Go to /docs to test the API."}
+
